@@ -1,0 +1,80 @@
+name: Publish Charm
+on:
+  workflow_dispatch:
+    inputs:
+      runs-on:
+        description: Description of the builder
+        default: ubuntu-22.04
+        type: string
+      arch:
+        description: Target for which architecture
+        default: amd64
+        type: string
+      charmcraft-channel:
+        description: Snap channel for charmcraft
+        default: latest/stable
+        type: string
+      release-channels:
+        description: List of release channels
+        required: false
+        type: string
+        default: '["latest/edge"]'
+
+jobs:
+  arch-to-bases-index:
+    name: Map selected arch to bases-index
+    runs-on: ${{ inputs.runs-on }}
+    outputs:
+      base: ${{ steps.base.outputs.result }}
+    steps:
+      - uses: actions/checkout@v3
+      - name: Find ${{ inputs.arch }} in the run-on section of charmcraft.yaml
+        id: base
+        run: |
+          sudo snap install yq
+          result=$(yq '.bases[] | select(.run-on[].architectures[]=="${{ inputs.arch }}") | key' charmcraft.yaml)
+          echo "result=$result" >> "$GITHUB_OUTPUT"
+  charm-build:
+    uses: charmed-kubernetes/workflows/.github/workflows/charmcraft-pack.yaml@workflows/charm-builders
+    needs: [arch-to-bases-index]
+    with:
+      runs-on: ${{ inputs.runs-on }}
+      charmcraft-channel: ${{ inputs.charmcraft-channel }}
+      bases-indicies: '["${{ needs.arch-to-bases-index.outputs.base }}"]'
+  resource-assemble:
+    name: Assemble Resources
+    runs-on: ${{ inputs.runs-on }}
+    env:
+      ARTIFACT_PATH: /tmp/artifact/
+    outputs:
+      resource-artifact: ${{ steps.assemble.outputs.resource-artifact }}
+    steps:
+      - uses: actions/checkout@v3
+      - name: Assemble Resources
+        id: assemble
+        run: |
+          mkdir -p $ARTIFACT_PATH
+          image=$(yq '.resources.coredns-image.upstream-source' metadata.yaml)
+          echo "resource-artifact=$(yq '.name' metadata.yaml)-resources" >> "$GITHUB_OUTPUT"
+          docker_pull=$(docker pull --platform linux/${{inputs.arch}} $image)
+          docker save $image | gzip > $ARTIFACT_PATH/coredns-image.tar.gz
+          echo $docker_pull
+          echo '[{"resource": "coredns-image",
+                  "image": "coredns-image.tar.gz"}]' > $ARTIFACT_PATH/charmcraft-upload.spec
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: ${{ steps.assemble.outputs.resource-artifact }}
+          path: ${{ env.ARTIFACT_PATH }}
+  charmcraft-upload:
+    needs: [charm-build, resource-assemble]
+    uses: charmed-kubernetes/workflows/.github/workflows/charmcraft-upload.yaml@workflows/charm-builders
+    with:
+      runs-on: ${{ inputs.runs-on }}
+      charmcraft-channel: ${{ inputs.charmcraft-channel }}
+      charm: ${{ needs.charm-build.outputs.charm }}
+      resources: ${{ needs.resource-assemble.outputs.resource-artifact }}
+      release-channels: ${{ inputs.release-channels }}
+      arch: ${{ inputs.arch }}
+    secrets:
+      CHARMCRAFT_AUTH: ${{ secrets.CHARMCRAFT_AUTH }}
