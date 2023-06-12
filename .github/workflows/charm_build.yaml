@@ -35,6 +35,7 @@ jobs:
           result=$(yq '.bases[] | select(.run-on[].architectures[]=="${{ inputs.arch }}") | key' charmcraft.yaml)
           echo "result=$result" >> "$GITHUB_OUTPUT"
   charm-build:
+    name: Build coredns for ${{ inputs.arch }}
     uses: charmed-kubernetes/workflows/.github/workflows/charmcraft-pack.yaml@workflows/charm-builders
     needs: [arch-to-bases-index]
     with:
@@ -42,7 +43,7 @@ jobs:
       charmcraft-channel: ${{ inputs.charmcraft-channel }}
       bases-indicies: '["${{ needs.arch-to-bases-index.outputs.base }}"]'
   resource-assemble:
-    name: Assemble Resources
+    name: Assemble Charm Resources
     runs-on: ${{ inputs.runs-on }}
     env:
       ARTIFACT_PATH: /tmp/artifact/
